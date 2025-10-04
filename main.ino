@@ -2,7 +2,9 @@
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 #include <Keypad.h>
-#include <VirtualWire.h>
+// #include <VirtualWire.h>
+#include <IRremote.h>
+
 
 #define JOY_PIN_X A3
 #define JOY_PIN_Y A2
@@ -86,7 +88,7 @@ const String manualParams[] = {"Light", "Color", "Watering"};
 // Состояние теплицы
 bool lightOn = false;
 bool waterOn = false;
-byte R = 128, G = 128, B = 128;
+byte R = 0, G = 0, B = 0;
 
 byte currentManual = 0;
 byte topManual = 0;
@@ -104,9 +106,13 @@ unsigned short joyX;
 unsigned short joyY;
 bool swState;
 
+#define IR_SEND_PIN 11
+
 void setup()
 {
   Serial.begin(9600);
+  IrSender.begin(IR_SEND_PIN, ENABLE_LED_FEEDBACK);
+
   pinMode(JOY_PIN_X, INPUT);
   pinMode(JOY_PIN_Y, INPUT);
   pinMode(JOY_SW_PIN, INPUT_PULLUP);
@@ -150,16 +156,6 @@ void loop()
   
   delay(50);
   lastSwState = swState;
-}
-
-void send (char *message)
-{
-  digitalWrite(LED_BUILTIN,HIGH);
-  Serial.print("Transmited: ");
-  Serial.println(message);
-  vw_send((uint8_t *)message, strlen(message));
-  vw_wait_tx(); // Wait until the whole message is gone
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 // Generic подменю (Info, Manual)
@@ -618,7 +614,8 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
     needRefresh = true;
     switch(currentManual){
       case 0: 
-        lightOn = !lightOn; 
+        lightOn = !lightOn;
+        IrSender.sendNEC(0x0444 & 0xFF, lightOn, 0); 
         break;
       case 1: 
         rgbCursor = 0; 
@@ -689,12 +686,15 @@ void drawManualEditRGB() {
       switch(rgbCursor){
         case 0: 
           R = val; 
+          IrSender.sendNEC(0x0111 & 0xFF, val, 0);
           break;
         case 1: 
           G = val; 
+          IrSender.sendNEC(0x0222 & 0xFF, val, 0);
           break;
         case 2: 
           B = val; 
+          IrSender.sendNEC(0x0333 & 0xFF, val, 0);
           break;
       }
 
