@@ -23,7 +23,8 @@ enum menu {
   Automatic,
   Info,
   Manual,
-  RgbEdit
+  RgbEdit,
+  SetupEdit
 };
 menu currentMenu = Main;
 bool needRefresh = true;
@@ -43,27 +44,26 @@ byte currentInfo = 0;
 byte topInfo = 0;
 
 // Параметры и предустановки
-#define AUTO_PARAM_COUNT 3
-const String autoParams[] = {"Water", "Sensor", "Other"};
-
+#define AUTO_PARAM_COUNT 2
+const String autoParams[] = {"Light <", "Water <"};
+short autoLight = 0;
+short autoWater = 0;
 
 #define MAX_PRESETS 3
 byte presetValues[MAX_PRESETS][AUTO_PARAM_COUNT] = {
-  {5, 10, 15},   // Preset 1
-  {3, 7, 20},    // Preset 2
-  {0, 0, 0}      // Preset 3 (пустой)
+  {5, 10},   // Preset 1
+  {3, 7},    // Preset 2
+  {0, 0}      // Preset 3 (пустой)
 };
 byte activePreset = 0; // выбранная предустановка
 
 // Setup меню
 byte currentPreset = 0;
 byte topPreset = 0;
-bool inPresetMenu = false;  
 
 // Automatic параметры
 byte currentParam = 0;     
 byte topParam = 0;         
-bool editingParam = false; 
 String editBuffer = "";
 
 // Клавиатура
@@ -82,12 +82,14 @@ const byte colPins[COLS] = {5, 4, 3, 2};
 Keypad customKeypad = Keypad(makeKeymap(hexaKeys), colPins, rowPins, COLS, ROWS);
 
 // Manual меню
-#define MANUAL_COUNT 3
-const String manualParams[] = {"Light", "Color", "Watering"};
+#define MANUAL_COUNT 5
+const String manualParams[] = {"Light", "Color", "Watering", "Ventil", "Rotor V"};
 
 // Состояние теплицы
 bool lightOn = false;
 bool waterOn = false;
+bool ventilationOn = false;
+byte rotorSpeed = 0;
 byte R = 0, G = 0, B = 0;
 
 byte currentManual = 0;
@@ -119,57 +121,47 @@ void setup()
 
   lcd.init();
   lcd.backlight();
-
-  drawMenu();
 }
 
 void loop()
 {
   swState = !digitalRead(JOY_SW_PIN); 
-  unsigned short X = analogRead(JOY_PIN_X);
-  unsigned short Y = analogRead(JOY_PIN_Y);
   
   joyX = analogRead(JOY_PIN_X);
   joyY = analogRead(JOY_PIN_Y);
 
   switch (currentMenu) {
     case Main:
-      handleNavigationMenu(X);
+      handleNavigationMenu();
       break;
     case Setup: // Setup
-      handleSetupMenu(X, Y);
+      handleSetupMenu();
       break;
     case Automatic: // Automatic
-      handleAutomaticMenu(X, Y);
+      handleAutomaticMenu();
       break;
     case Info: // Info
-      handleInfoMenu(X, Y);
+      handleInfoMenu();
       break;
     case Manual: // Manual
-      handleManualMenu(X, Y); 
+      handleManualMenu(); 
       break; 
     case RgbEdit:
       drawManualEditRGB();
       break;
+    case SetupEdit:
+      handlePresetEdit();
+      break;
   }
-
   
   delay(50);
   lastSwState = swState;
 }
 
-// Generic подменю (Info, Manual)
-void handleGenericSubMenu(unsigned short X, unsigned short Y) {
-  if (Y < 100) {
-    drawMenu();
-    delay(300);
-  }
-}
-
 // Главное меню
-void handleNavigationMenu(unsigned short X)
+void handleNavigationMenu()
 {
-  if (X <= 200 && !joyMovedDown) {
+  if (joyX <= 200 && !joyMovedDown) {
     if (selection < MENU_COUNT - 1) {
       selection++;
       if (selection >= topMenu + 2) 
@@ -177,385 +169,354 @@ void handleNavigationMenu(unsigned short X)
       needRefresh = true;
     }
     joyMovedDown = true;
-  } else if (X > 200 && joyMovedDown) {
+  } else if (joyX > 200 && joyMovedDown) {
     joyMovedDown = false;
   }
 
-  if (X >= 800 && !joyMovedUp) {
+  if (joyX >= 800 && !joyMovedUp) {
     if (selection > 0) {
       selection--;
-      if (selection < topMenu) topMenu--;
+      if (selection < topMenu) 
+        topMenu--;
       needRefresh = true;
     }
     joyMovedUp = true;
-  } else if (X < 800 && joyMovedUp) {
+  } else if (joyX < 800 && joyMovedUp) {
     joyMovedUp = false;
   } 
 
   if (needRefresh) {
     needRefresh = false;
-    drawMenu();
+    lcd.clear();
+    for (byte i = 0; i < 2; ++i) {
+      byte menuIndex = topMenu + i;
+      if (menuIndex < MENU_COUNT) {
+        lcd.setCursor(0, i);
+        lcd.print((menuIndex == selection ? "- " : "  ") + menus[menuIndex]);
+      }
+    }
   }
 
   if (swState && swState != lastSwState) {
+    needRefresh = true;
     switch (selection) {
       case 0: 
         currentMenu = Setup;
         break;
       case 1: 
         currentMenu = Automatic;
+        currentParam = 0;
+        editValue = 3;
         break;
       case 2: 
         currentMenu = Info;
         break;
       case 3: 
         currentMenu = Manual;
-        needRefresh = true;
+        editValue = MANUAL_COUNT;
         break;
     }
   }
 }
 
-void drawMenu()
-{
-  lcd.clear();
-  for (byte i = 0; i < 2; ++i) {
-    byte menuIndex = topMenu + i;
+void handleSetupMenu() {
+  // Навигация по списку предустановок
+  if (joyX <= 200 && !joyMovedDown) {
+    if (currentPreset < MAX_PRESETS - 1) {
+      currentPreset++;
 
-    if (menuIndex < MENU_COUNT) {
-      lcd.setCursor(0, i);
-      lcd.print((menuIndex == selection ? "- " : "  ") + menus[menuIndex]);
+      if (currentPreset >= topPreset + 2) 
+        topPreset++;
+
+      needRefresh = true;
     }
+
+    joyMovedDown = true;
+  } else if (joyX > 200 && joyMovedDown) {
+    joyMovedDown = false;
   }
-}
 
-// Setup меню
-void drawSetupMenu() {
-  lcd.clear();
-  for (byte i = 0; i < 2; ++i) {
-    byte presetIndex = topPreset + i;
-
-    if (presetIndex < MAX_PRESETS) {
-      lcd.setCursor(0, i);
-      String name = "Preset " + String(presetIndex+1);
-
-      if (presetIndex == activePreset)
-        name += "*";
-
-      lcd.print((presetIndex == currentPreset ? "- " : "  ") + name);
+  if (joyX >= 900 && !joyMovedUp) {
+    if (currentPreset > 0) {
+      currentPreset--;
+      if (currentPreset < topPreset) topPreset--;
+      needRefresh = true;
     }
+    joyMovedUp = true;
+  } else if (joyX < 800 && joyMovedUp) {
+    joyMovedUp = false;
   }
-}
 
-void handleSetupMenu(unsigned short X, unsigned short Y) {
-  if (!inPresetMenu) {
-    // Навигация по списку предустановок
-    if (X < 100 && !joyMovedDown) {
-      if (currentPreset < MAX_PRESETS - 1) {
-        currentPreset++;
-
-        if (currentPreset >= topPreset + 2) 
-          topPreset++;
-
-        drawSetupMenu();
-      }
-
-      joyMovedDown = true;
-    } else if (X > 200 && joyMovedDown) {
-      joyMovedDown = false;
-    }
-
-    if (X > 900 && !joyMovedUp) {
-      if (currentPreset > 0) {
-        currentPreset--;
-        if (currentPreset < topPreset) topPreset--;
-        drawSetupMenu();
-      }
-      joyMovedUp = true;
-    } else if (X < 800 && joyMovedUp) {
-      joyMovedUp = false;
-    }
-
-    // Нажатие джойстика = выбор активной предустановки
-    if (swState) {
-      activePreset = currentPreset; 
-      drawSetupMenu();
-      delay(300);
-    }
-
-    // Свайп вправо = вход в параметры выбранного пресета
-    if (Y > 900) {
-      inPresetMenu = true;
-      currentParam = 0;
-      topParam = 0;
-      editingParam = false;
-      drawPresetMenu();
-      delay(300);
-    } else if (Y < 100) {
-      drawMenu();
-      delay(300);
-    }
+  // Нажатие джойстика = выбор активной предустановки
+  if (swState && swState != lastSwState) {
+    activePreset = currentPreset; 
+    needRefresh = true;
   }
-  else {
-    handlePresetParams(X, Y);
-  }
-}
 
+  if (needRefresh) {
+    needRefresh = false;
 
-void drawPresetMenu() {
-  lcd.clear();
-  for (byte i = 0; i < 2; i++) {
-    byte paramIndex = topParam + i;
+    lcd.clear();
+    for (byte i = 0; i < 2; ++i) {
+      byte presetIndex = topPreset + i;
 
-    if (paramIndex < AUTO_PARAM_COUNT) {
-      lcd.setCursor(0, i);
+      if (presetIndex < MAX_PRESETS) {
+        lcd.setCursor(0, i);
+        String name = "Preset " + String(presetIndex+1);
 
-      if (paramIndex == currentParam) {
-        lcd.print("- " + autoParams[paramIndex] + ": " + String(presetValues[currentPreset][paramIndex]) + " m");
-      } else {
-        lcd.print("  " + autoParams[paramIndex] + ": " + String(presetValues[currentPreset][paramIndex]) + " m");
+        if (presetIndex == activePreset)
+          name += "*";
+
+        lcd.print((presetIndex == currentPreset ? "- " : "  ") + name);
       }
     }
   }
+
+  // Свайп вправо = вход в параметры выбранного пресета
+  if (joyY > 800) {
+    currentParam = 0;
+    topParam = 0;
+    editValue = 4;
+    currentMenu = SetupEdit;
+    needRefresh = true;
+    delay(300);
+  } else if (joyY < 200) {
+    needRefresh = true;
+    currentMenu = Main;
+    delay(300);
+  }
 }
 
-void handlePresetParams(unsigned short X, unsigned short Y) {
+void handlePresetEdit() {
   char key = customKeypad.getKey();
 
-  if (!editingParam) {
-    if (X < 100 && !joyMovedDown) {
-      if (currentParam < AUTO_PARAM_COUNT - 1) {
-        currentParam++;
-        if (currentParam >= topParam + 2) topParam++;
-        drawPresetMenu();
-      }
-      joyMovedDown = true;
-    } else if (X > 200 && joyMovedDown) {
-      joyMovedDown = false;
-    }
 
-    if (X > 900 && !joyMovedUp) {
-      if (currentParam > 0) {
-        currentParam--;
-        if (currentParam < topParam) topParam--;
-        drawPresetMenu();
-      }
-      joyMovedUp = true;
-    } else if (X < 800 && joyMovedUp) {
-      joyMovedUp = false;
-    }
-
-    if (swState) {
-      editingParam = true;
-      editBuffer = "";
-      drawEditScreen();
-      delay(300);
-    }
-
-    if (Y < 100) {
-      inPresetMenu = false;
-      drawSetupMenu();
-      delay(300);
-    }
-  } else {
-    if (key) {
-      if (key >= '0' && key <= '9') {
-        editBuffer += key;
-        drawEditScreen();
-      } else if (key == 'A' && editBuffer.length() > 0) { 
-        editBuffer.remove(editBuffer.length() - 1);
-        drawEditScreen();
-      }
-    }
-
-    if (swState && editBuffer.length() > 0) {
-      presetValues[currentPreset][currentParam] = editBuffer.toInt();
-      editingParam = false;
-      drawPresetMenu();
-      delay(300);
-    }
-
-    if (Y < 100) {
-      editingParam = false;
-      drawPresetMenu();
-      delay(300);
-    }
-  }
-}
-
-// Automatic меню
-void handleAutomaticMenu(unsigned short X, unsigned short Y) {
-  char key = customKeypad.getKey();
-
-  if (!editingParam) {
-    if (X < 100 && !joyMovedDown) {
+    if (joyX <= 200 && !joyMovedDown) {
       if (currentParam < AUTO_PARAM_COUNT - 1) {
         currentParam++;
 
         if (currentParam >= topParam + 2) 
           topParam++;
 
-        drawAutomaticMenu();
+        needRefresh = true;
       }
       joyMovedDown = true;
-    } else if (X > 200 && joyMovedDown) {
+    } else if (joyX > 200 && joyMovedDown) {
       joyMovedDown = false;
     }
 
-    if (X > 900 && !joyMovedUp) {
+    if (joyX >= 800 && !joyMovedUp) {
       if (currentParam > 0) {
         currentParam--;
 
         if (currentParam < topParam) 
           topParam--;
 
-        drawAutomaticMenu();
+        needRefresh = true;
       }
       joyMovedUp = true;
-    } else if (X < 800 && joyMovedUp) {
+    } else if (joyX < 800 && joyMovedUp) {
       joyMovedUp = false;
     }
 
-    if (swState) {
-      editingParam = true;
-      editBuffer = "";
-      drawEditScreen();
-      delay(300);
+    if (swState && swState != lastSwState) {
+      needRefresh = true;
+      if (editValue == 4) {
+        editValue = currentParam;
+        editBuffer = "";
+      } else {
+        editValue = 4;
+        presetValues[currentPreset][currentParam] = editBuffer.toInt();
+      }
     }
 
-    if (Y < 100) {
-      drawMenu();
-      delay(300);
-    }
-  } else {
-    if (key) {
+    if (editValue != 4 && key) {
+      needRefresh = true;
       if (key >= '0' && key <= '9') {
         editBuffer += key;
-        drawEditScreen();
       } else if (key == 'A' && editBuffer.length() > 0) { 
         editBuffer.remove(editBuffer.length() - 1);
-        drawEditScreen();
       }
     }
 
-    if (swState && editBuffer.length() > 0) {
-      presetValues[activePreset][currentParam] = editBuffer.toInt();
-      editingParam = false;
-      drawAutomaticMenu();
-      delay(300);
+    if (needRefresh) {
+      needRefresh = false;
+
+      lcd.clear();
+      for (byte i = 0; i < 2; i++) {
+        byte paramIndex = topParam + i;
+
+        if (paramIndex < AUTO_PARAM_COUNT) {
+          lcd.setCursor(0, i);
+
+          if (paramIndex == currentParam) {
+            if (editValue == currentParam) {
+              lcd.print("* " + autoParams[paramIndex] + ": " + editBuffer + "%");
+            } else {
+              lcd.print("- " + autoParams[paramIndex] + ": " + String(presetValues[currentPreset][paramIndex]) + "%");
+            }
+          } else {
+            lcd.print("  " + autoParams[paramIndex] + ": " + String(presetValues[currentPreset][paramIndex]) + "%");
+          }
+        }
+      }
     }
 
-    if (Y < 100) {
-      editingParam = false;
-      drawAutomaticMenu();
+    if (joyY < 200) {
+      currentMenu = Setup;
+      needRefresh = true;
       delay(300);
     }
-  }
 }
 
-void drawAutomaticMenu() {
-  lcd.clear();
-  for (byte i = 0; i < 2; i++) {
-    byte paramIndex = topParam + i;
+// Automatic меню
+void handleAutomaticMenu() {
+   char key = customKeypad.getKey();
 
-    if (paramIndex < AUTO_PARAM_COUNT) {
-      lcd.setCursor(0, i);
 
-      if (paramIndex == currentParam) {
-        lcd.print("- " + autoParams[paramIndex] + ": " + String(presetValues[activePreset][paramIndex]) + " m");
+    if (joyX <= 200 && !joyMovedDown) {
+      if (currentParam < AUTO_PARAM_COUNT - 1) {
+        currentParam++;
+
+        if (currentParam >= topParam + 2) 
+          topParam++;
+
+        needRefresh = true;
+      }
+      joyMovedDown = true;
+    } else if (joyX > 200 && joyMovedDown) {
+      joyMovedDown = false;
+    }
+
+    if (joyX >= 800 && !joyMovedUp) {
+      if (currentParam > 0) {
+        currentParam--;
+
+        if (currentParam < topParam) 
+          topParam--;
+
+        needRefresh = true;
+      }
+      joyMovedUp = true;
+    } else if (joyX < 800 && joyMovedUp) {
+      joyMovedUp = false;
+    }
+
+    if (swState && swState != lastSwState) {
+      needRefresh = true;
+      if (editValue == 3) {
+        editValue = currentParam;
+        editBuffer = "";
       } else {
-        lcd.print("  " + autoParams[paramIndex] + ": " + String(presetValues[activePreset][paramIndex]) + " m");
+        if (editValue == 0) {
+          autoLight = editBuffer.toInt();
+          IrSender.sendNEC(0x0555 & 0xFF, autoLight, 0); 
+        } else {
+          autoWater = editBuffer.toInt();
+          IrSender.sendNEC(0x0777 & 0xFF, autoWater, 0);
+        }
+        editValue = 3;
       }
     }
-  }
+
+    if (editValue != 3 && key) {
+      needRefresh = true;
+      if (key >= '0' && key <= '9') {
+        editBuffer += key;
+      } else if (key == 'A' && editBuffer.length() > 0) { 
+        editBuffer.remove(editBuffer.length() - 1);
+      }
+    }
+
+    if (needRefresh) {
+      needRefresh = false;
+
+      lcd.clear();
+      for (byte i = 0; i < 2; i++) {
+        byte paramIndex = topParam + i;
+
+        if (paramIndex < AUTO_PARAM_COUNT) {
+          lcd.setCursor(0, i);
+
+          if (paramIndex == currentParam) {
+            if (editValue == currentParam) {
+              lcd.print("* " + autoParams[paramIndex] + ": " + editBuffer + "%");
+            } else {
+              lcd.print("- " + autoParams[paramIndex] + ": " + String(paramIndex == 0 ? autoLight : autoWater) + "%");
+            }
+          } else {
+            lcd.print("  " + autoParams[paramIndex] + ": " + String(paramIndex == 0 ? autoLight : autoWater) + "%");
+          }
+        }
+      }
+    }
+
+    if (joyY < 200) {
+      currentMenu = Main;
+      needRefresh = true;
+      delay(300);
+    }
 }
 
-// Общие экраны
-void drawEditScreen()
-{
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(autoParams[currentParam]);
-  lcd.setCursor(0, 1);
-  lcd.print("Value: " + editBuffer);
-}
-
-void drawSubMenu() {
-  lcd.clear();
-  switch (currentMenu) {
-    case 0:
-      drawSetupMenu();   
-      break;
-    case 1:
-      drawAutomaticMenu();
-      break;
-    case 2:
-      drawInfoMenu();
-      break;
-    case 3:
-      lcd.setCursor(0, 0);
-      lcd.print("Menu: Manual");
-      lcd.setCursor(0, 1);
-      lcd.print("<- Back");
-      break;
-    default:
-      lcd.setCursor(0, 0);
-      lcd.print("Unknown menu");
-      break;
-  }
-}
-
-void handleInfoMenu(unsigned short X, unsigned short Y) {
-  if (X < 100 && !joyMovedDown) {
+void handleInfoMenu() {
+  if (joyX <= 200 && !joyMovedDown) {
     if (currentInfo < infoCount - 1) {
       currentInfo++;
-      if (currentInfo >= topInfo + 2) topInfo++;
-      drawInfoMenu();
+
+      if (currentInfo >= topInfo + 2) 
+        topInfo++;
+
+      needRefresh = true;
     }
     joyMovedDown = true;
-  } else if (X > 200 && joyMovedDown) {
+  } else if (joyX > 200 && joyMovedDown) {
     joyMovedDown = false;
   }
 
-  if (X > 900 && !joyMovedUp) {
+  if (joyX >= 800 && !joyMovedUp) {
     if (currentInfo > 0) {
       currentInfo--;
-      if (currentInfo < topInfo) topInfo--;
-      drawInfoMenu();
+
+      if (currentInfo < topInfo) 
+        topInfo--;
+
+      needRefresh = true;
     }
     joyMovedUp = true;
-  } else if (X < 800 && joyMovedUp) {
+  } else if (joyX < 800 && joyMovedUp) {
     joyMovedUp = false;
   }
 
+  if (needRefresh) {
+    needRefresh = false;
+    lcd.clear();
+    for (byte i = 0; i < 2; i++) {
+      byte infoIndex = topInfo + i;
+
+      if (infoIndex < infoCount) {
+        lcd.setCursor(0, i);
+
+        if (infoIndex == currentInfo) 
+          lcd.print("- " + infoParams[infoIndex]);
+        else 
+          lcd.print("  " + infoParams[infoIndex]);
+      }
+    }
+  }
+
   // Выход свайпом влево
-  if (Y < 100) {
-    drawMenu();
+  if (joyY < 100) {
+    needRefresh = true;
+    currentMenu = Main;
     delay(300);
   }
 }
 
-void drawInfoMenu() {
-  lcd.clear();
-  for (byte i = 0; i < 2; i++) {
-    byte infoIndex = topInfo + i;
-
-    if (infoIndex < infoCount) {
-      lcd.setCursor(0, i);
-
-      if (infoIndex == currentInfo) 
-        lcd.print("- " + infoParams[infoIndex]);
-
-      else lcd.print("  " + infoParams[infoIndex]);
-    }
-  }
-}
-
 // Обработка Manual меню
-void handleManualMenu(unsigned short X, unsigned short Y) {
+void handleManualMenu() {
   char key = customKeypad.getKey();
 
-  if (X <= 200 && !joyMovedDown) { 
+  if (joyX <= 200 && !joyMovedDown && editValue == MANUAL_COUNT) { 
       if (currentManual < MANUAL_COUNT - 1) 
         currentManual++; 
 
@@ -564,11 +525,11 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
       
       needRefresh = true;
       joyMovedDown = true;
-  } else if (X > 200 && joyMovedDown) {
+  } else if (joyX > 200 && joyMovedDown) {
     joyMovedDown = false;
   }
 
-  if (X >= 800 && !joyMovedUp) { 
+  if (joyX >= 800 && !joyMovedUp && editValue == MANUAL_COUNT) { 
     if(currentManual > 0) 
       currentManual--; 
     if(currentManual < topManual) 
@@ -576,16 +537,26 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
     
     needRefresh = true;
     joyMovedUp = true;
-  } else if (X < 800 && joyMovedUp) {
+  } else if (joyX < 800 && joyMovedUp) {
     joyMovedUp = false;
+  }
+
+  if (editValue == 4 && key) {
+    needRefresh = true;
+
+    if (key >= '0' && key <= '9') {
+      editBuffer += key;
+    } else if (key == 'A' && editBuffer.length() > 0) {
+      editBuffer.remove(editBuffer.length() - 1);
+    }
   }
 
   if (needRefresh) {
     lcd.clear();
     needRefresh = false;
-    for(byte i=0;i<2;i++){
-      byte idx = topManual+i;
-      if(idx < MANUAL_COUNT){
+    for(byte i = 0; i < 2; i++) {
+      byte idx = topManual + i;
+      if (idx < MANUAL_COUNT) {
           lcd.setCursor(0,i);
           String val;
           switch(idx){
@@ -598,13 +569,19 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
             case 2: 
               val = waterOn? "ON" : "OFF"; 
               break;
+            case 3:
+              val = ventilationOn? "ON" : "OFF"; 
+              break;
+            case 4:
+              val = (editValue != 4 ? String(rotorSpeed) : editBuffer) + "%"; 
+              break;
           }
-          lcd.print((idx==currentManual?"- ":"  ") + manualParams[idx] + ": " + val);
+          lcd.print((idx==currentManual ? (editValue != 4 ? "- " : "* ") : "  ") + manualParams[idx] + ": " + val);
       }
     }
   }
   
-  if (Y < 100) { 
+  if (joyY < 200 && editValue == MANUAL_COUNT) { 
     currentMenu = Main;
     needRefresh = true;
     delay(300); 
@@ -612,7 +589,7 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
 
   if (swState && swState != lastSwState) {
     needRefresh = true;
-    switch(currentManual){
+    switch (currentManual) {
       case 0: 
         lightOn = !lightOn;
         IrSender.sendNEC(0x0444 & 0xFF, lightOn, 0); 
@@ -624,17 +601,25 @@ void handleManualMenu(unsigned short X, unsigned short Y) {
         break;  
       case 2: 
         waterOn = !waterOn; 
+        IrSender.sendNEC(0x0666 & 0xFF, waterOn, 0); 
+        break;
+      case 3: 
+        ventilationOn = !ventilationOn; 
+        IrSender.sendNEC(0x0888 & 0xFF, ventilationOn, 0); 
+        break;
+      case 4:
+        if (editValue == MANUAL_COUNT) {
+          editValue = 4;
+          editBuffer = "";
+        } else {
+          editValue = MANUAL_COUNT;
+          byte val = constrain(editBuffer.toInt(), 0, 100);
+          rotorSpeed = val;
+          IrSender.sendNEC(0x0999 & 0xFF, rotorSpeed, 0); 
+        }
         break;
     }
   }
-}
-
-void drawManualEdit(){
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print(manualParams[currentParam]);
-  lcd.setCursor(0,1);
-  lcd.print("Value: " + editBufferManual);
 }
 
 // Экран редактирования RGB
