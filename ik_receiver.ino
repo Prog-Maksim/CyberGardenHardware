@@ -26,7 +26,7 @@ const char* ssid = "cybergarden";
 const char* password = "cybergarden";
 
 // Токен бота Telegram
-#define BOT_TOKEN "5994728533:AAGbpqR_nWnBG-XdwDmbHLgMDITpSvqODGg"
+#define BOT_TOKEN "TOKEN_BOT"
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOT_TOKEN, client);
