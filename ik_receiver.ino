@@ -1,8 +1,9 @@
 #include "WiFi.h"
 #include "WiFiClientSecure.h"
-#include "UniversalTelegramBot.h"
+#include "UniversalTelegramBotCustom.h"
 #include "ArduinoJson.h"
 #include "DHT.h"
+#include <Stepper.h>
 #include <IRremote.hpp>
 #define IR_RECEIVE_PIN 23
 
@@ -11,6 +12,8 @@
 #define LAMP_B_PORT 15
 
 bool lampTurned = false;
+bool waterTurned = false;
+bool ventilationTurned = false;
 byte lampR = 0, lampG = 0, lampB = 0;
 /* Контакт, к которому подключен датчик */
 #define DHTPIN 27
@@ -26,7 +29,7 @@ const char* ssid = "cybergarden";
 const char* password = "cybergarden";
 
 // Токен бота Telegram
-#define BOT_TOKEN "TOKEN_BOT"
+#define BOT_TOKEN "******"
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOT_TOKEN, client);
@@ -35,8 +38,20 @@ UniversalTelegramBot bot(BOT_TOKEN, client);
 unsigned long lastTimeBotRan = 0;
 const int botRequestDelay = 1000;
 
-// Функции-заглушки для получения данных
+//void (*receiveSignals)() = &receiveIr;
+const int stepsPerRevolution = 2048;
+Stepper myStepper(stepsPerRevolution, 5, 18, 19, 21);
 
+int maxRotorSpeed = 0;
+int currentRotorSpeed = 0;
+int rotorSavedSpeed = 0;
+
+#define PUMP_PIN 14
+
+bool autoLight = false;
+bool autoWater = false;
+short turnLight = 0;
+short turnWater = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -46,6 +61,10 @@ void setup() {
   pinMode(LAMP_R_PORT, OUTPUT);
   pinMode(LAMP_G_PORT, OUTPUT);
   pinMode(LAMP_B_PORT, OUTPUT);
+
+  pinMode(PUMP_PIN, OUTPUT);
+
+  myStepper.setSpeed(currentRotorSpeed);
 
   if (!lampTurned) {
     analogWrite(LAMP_R_PORT, 0);
@@ -75,34 +94,74 @@ void loop() {
   // Serial.println(w);
 
 
-  if (millis() - lastTimeBotRan > botRequestDelay) {
-    // Быстрая проверка новых сообщений без длительных операций
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+  // if (millis() - lastTimeBotRan > botRequestDelay) {
+  //   // Быстрая проверка новых сообщений без длительных операций
+  //   int numNewMessages = bot.getUpdates(bot.last_message_received + 1, receiveIr);
     
-    if (numNewMessages) {
-      Serial.println("Найдены новые сообщения: " + String(numNewMessages));
+  //   if (numNewMessages) {
+  //     Serial.println("Найдены новые сообщения: " + String(numNewMessages));
       
-      // Обрабатываем только по одному сообщению за цикл для уменьшения блокировки
-      for (int i = 0; i < min(numNewMessages, 1); i++) { // Ограничиваем обработку 1 сообщением за цикл
-        String chat_id = String(bot.messages[i].chat_id);
-        String text = bot.messages[i].text;
-        String from_name = bot.messages[i].from_name;
+  //     // Обрабатываем только по одному сообщению за цикл для уменьшения блокировки
+  //     for (int i = 0; i < min(numNewMessages, 1); i++) { // Ограничиваем обработку 1 сообщением за цикл
+  //       String chat_id = String(bot.messages[i].chat_id);
+  //       String text = bot.messages[i].text;
+  //       String from_name = bot.messages[i].from_name;
         
-        Serial.println("Обрабатываем сообщение от: " + from_name);
-        Serial.println("Текст: " + text);
+  //       Serial.println("Обрабатываем сообщение от: " + from_name);
+  //       Serial.println("Текст: " + text);
         
-        // Быстрая обработка команды
-        handleCommand(text, chat_id);
+  //       // Быстрая обработка команды
+  //       handleCommand(text, chat_id);
         
-        // После обработки одного сообщения выходим, чтобы не блокировать ИК
-        break;
-      }
+  //       // После обработки одного сообщения выходим, чтобы не блокировать ИК
+  //       break;
+  //     }
+  //   }
+  //   lastTimeBotRan = millis();
+  // }
+
+  receiveIr();
+  
+  // Делаем шаг — полный оборот
+  myStepper.step(stepsPerRevolution);
+
+  // Увеличиваем скорость на 1, пока не достигнем maxSpeed
+  if (currentRotorSpeed < maxRotorSpeed) {
+    currentRotorSpeed++;
+    myStepper.setSpeed(currentRotorSpeed);
+  } else if (currentRotorSpeed > maxRotorSpeed) {
+    currentRotorSpeed = maxRotorSpeed;
+    myStepper.setSpeed(currentRotorSpeed);
+  }
+
+  if (autoLight) {
+    if (analogRead(LIGHTLEVELPIN) >= turnLight) {
+      lampTurned = true;
+      analogWrite(LAMP_R_PORT, lampR);
+      analogWrite(LAMP_G_PORT, lampG);
+      analogWrite(LAMP_B_PORT, lampB);
+    } else {
+      lampTurned = false;
+      analogWrite(LAMP_R_PORT, 0);
+      analogWrite(LAMP_G_PORT, 0);
+      analogWrite(LAMP_B_PORT, 0);
     }
-    lastTimeBotRan = millis();
+  }
+
+  if (autoWater) {
+    if (int w = analogRead(WATERLEVELPIN) >= turnWater) {
+      waterTurned = true;
+      digitalWrite(PUMP_PIN, waterTurned);
+    } else {
+      waterTurned = false;
+      digitalWrite(PUMP_PIN, waterTurned);
+    }
   }
 
   //Serial.println("i'm alive!");
+}
 
+void receiveIr() {
   if (IrReceiver.decode()) {
       Serial.println(IrReceiver.decodedIRData.command); // Print "old" raw data
       Serial.println(IrReceiver.decodedIRData.decodedRawData);
@@ -122,6 +181,7 @@ void loop() {
         if (lampTurned)
           analogWrite(15, lampB);
       } else if (IrReceiver.decodedIRData.address == 0x44) {
+        autoLight = false;
         if (IrReceiver.decodedIRData.command == 0) {
           lampTurned = false;
           analogWrite(LAMP_R_PORT, 0);
@@ -132,6 +192,24 @@ void loop() {
           analogWrite(LAMP_R_PORT, lampR);
           analogWrite(LAMP_G_PORT, lampG);
           analogWrite(LAMP_B_PORT, lampB);
+        }
+      } else if (IrReceiver.decodedIRData.address == 0x55) {
+        autoLight = true;
+        short turnLight = (int)(1023 * IrReceiver.decodedIRData.command);
+      } else if (IrReceiver.decodedIRData.address == 0x66) {
+        autoWater = false;
+        waterTurned = IrReceiver.decodedIRData.command;
+        digitalWrite(PUMP_PIN, waterTurned);
+      } else if (IrReceiver.decodedIRData.address == 0x77) {
+        autoWater = true;
+        short turnWater = (int)(1023 * IrReceiver.decodedIRData.command);
+      } else if (IrReceiver.decodedIRData.address == 0x88) {
+        ventilationTurned = IrReceiver.decodedIRData.command;
+        if (ventilationTurned) {
+          maxRotorSpeed = rotorSavedSpeed;
+        } else {
+          rotorSavedSpeed = maxRotorSpeed;
+          maxRotorSpeed = 0;
         }
       }
 
